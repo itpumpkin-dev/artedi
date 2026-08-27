@@ -7,10 +7,14 @@
   "scripts": {
     "scrape": "node scrape.js",
     "scrape:headed": "node scrape.js --headed",
+    "db:setup": "node setup-db.js",
+    "import": "node import-xlsx.js",
     "codegen": "playwright codegen https://vrm.homepro.co.th/auth/login",
     "install-browser": "playwright install chromium"
   },
   "dependencies": {
-    "playwright": "^1.49.0"
+    "pg": "^8.23.0",
+    "playwright": "^1.49.0",
+    "xlsx": "^0.18.5"
   }
 }
