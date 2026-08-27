@@ -1,0 +1,33 @@
+{
+  "baseUrl": "https://vrm.homepro.co.th",
+
+  "//login": "ใส่ที่นี่ได้ หรือปล่อยว่างแล้วตั้ง env VRM_EMAIL / VRM_PASSWORD แทน (ปลอดภัยกว่า)",
+  "login": {
+    "email": "",
+    "password": ""
+  },
+
+  "//vendorNo": "เลข Vendor No. ที่จะเลือกในหน้า 'บัญชีคู่ค้า' (ดูจากการ์ด PLATINUM) — เว้นว่างถ้าระบบเข้าให้อัตโนมัติ",
+  "vendorNo": "3263",
+
+  "export": {
+    "//tab": "แท็บบนหน้า Export Data: PO | SALES | INVENTORY",
+    "tab": "SALES",
+    "//periodMode": "Date หรือ Month/Year",
+    "periodMode": "Date",
+    "//channelType": "ค่าใน dropdown 'Channel Type' ของ dialog (เช่น ALL)",
+    "channelType": "ALL",
+    "//mch3": "ค่าใน dropdown 'MCH3' ของ dialog (เช่น ALL)",
+    "mch3": "ALL",
+    "//dates": "รับได้ทั้ง YYYY-MM-DD และ DD/MM/YYYY — ช่วงต้องไม่เกิน 31 วัน",
+    "dateFrom": "2026-07-01",
+    "dateTo": "2026-07-31"
+  },
+
+  "downloadDir": "downloads",
+  "headless": true,
+  "slowMoMs": 0,
+  "navigationTimeoutMs": 60000,
+  "//jobTimeoutMs": "เวลารอสูงสุดให้ศูนย์ดาวน์โหลดประมวลผลไฟล์เสร็จ (ms)",
+  "jobTimeoutMs": 300000
+}

@@ -1,0 +1,16 @@
+{
+  "name": "vrm-homepro-scraper",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Playwright bot ดึงไฟล์ Export Excel (SALES - Article By Channel Type) จาก vrm.homepro.co.th",
+  "scripts": {
+    "scrape": "node scrape.js",
+    "scrape:headed": "node scrape.js --headed",
+    "codegen": "playwright codegen https://vrm.homepro.co.th/auth/login",
+    "install-browser": "playwright install chromium"
+  },
+  "dependencies": {
+    "playwright": "^1.49.0"
+  }
+}
