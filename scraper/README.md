@@ -111,3 +111,28 @@ node import-xlsx.js file.xlsx --refresh-mv    # refresh rollup รายเด�
 
 ใช้ **SheetJS (`xlsx`)** ไม่ใช่ `exceljs` เพราะไฟล์จาก VRM ทำให้ exceljs parse ไม่ผ่าน
 วันที่อ่านเป็น serial number แล้วแปลงเองแบบ UTC (กัน timezone เลื่อนวัน)
+
+## เก็บไฟล์ต้นฉบับขึ้น S3 (optional)
+
+ถ้าตั้ง env เหล่านี้ (ใน `scraper/.env` หรือ `.env` ที่ root ก็ได้ — โหลดทั้งคู่) `import-xlsx.js`
+จะอัปโหลดไฟล์ `.xlsx` ขึ้น S3 หลังโหลดเข้า DB สำเร็จ แล้วบันทึก key/url ไว้ที่
+`vrm.import_batch.s3_key` / `.file_url`:
+
+```
+AWS_ACCESS_KEY_ID=...
+AWS_SECRET_ACCESS_KEY=...
+AWS_DEFAULT_REGION=ap-southeast-1
+AWS_BUCKET=your-bucket
+AWS_USE_PATH_STYLE_ENDPOINT=false
+# AWS_S3_PREFIX=vrm/sale-article-channel-type   (ค่าเริ่มต้น)
+# AWS_ENDPOINT=https://...                      (เฉพาะ S3-compatible เช่น MinIO)
+```
+
+key ที่ได้: `{AWS_S3_PREFIX}/{vendorNo}/{fileName}` เช่น
+`vrm/sale-article-channel-type/3263/VRM_Sale_ArticleChannelType_....xlsx`
+
+ไม่ตั้งค่า `AWS_BUCKET` ไว้ = ข้ามขั้นตอนนี้ไปเฉย ๆ (ไม่ error, ข้อมูลใน DB โหลดปกติ)
+`--no-s3` ข้ามเฉพาะรอบนั้น, `--s3-prefix <path>` เปลี่ยน prefix ชั่วคราว
+
+**หมายเหตุ:** ไม่ตั้ง ACL ให้ไฟล์เป็น public — url ที่ได้เข้าถึงได้หรือไม่ขึ้นกับ bucket policy ของคุณเอง
+(ต้องรัน `npm run db:setup` ใหม่หลังเพิ่มฟีเจอร์นี้ เพื่อให้ได้ `sql/003_vrm_add_s3_columns.sql`)

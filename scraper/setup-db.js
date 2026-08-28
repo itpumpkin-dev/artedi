@@ -47,7 +47,10 @@ async function main() {
   const args = process.argv.slice(2);
   const files = args.length
     ? args.map((f) => path.resolve(f))
-    : ['001_vrm_sales_schema.sql', '002_vrm_load_function.sql'].map((f) => path.join(__dirname, 'sql', f));
+    : fs.readdirSync(path.join(__dirname, 'sql'))
+        .filter((f) => f.endsWith('.sql'))
+        .sort() // 001_, 002_, 003_... เรียงตามเลขนำหน้า
+        .map((f) => path.join(__dirname, 'sql', f));
 
   const cfg = pgConfig();
   log(`เชื่อมต่อ ${cfg.host}:${cfg.port}/${cfg.database} เป็น ${cfg.user}`);

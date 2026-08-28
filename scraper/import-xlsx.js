@@ -4,11 +4,10 @@
  *  1. INSERT vrm.import_batch (status='loading')
  *  2. stream อ่าน xlsx -> INSERT vrm.stg_article_channel_raw ทีละ chunk
  *  3. SELECT vrm.load_batch(id)  -> merge เข้า dim + fact (full refresh ต่อขอบเขต batch)
- *  4. (option) REFRESH MATERIALIZED VIEW
+ *  4. อัปโหลดไฟล์ .xlsx ต้นฉบับขึ้น S3 (ถ้าตั้งค่า AWS_BUCKET ไว้) แล้วบันทึก url ลง import_batch
+ *  5. (option) REFRESH MATERIALIZED VIEW
  *
- *  ต้องรัน schema ก่อน:
- *    psql "$PG" -f sql/001_vrm_sales_schema.sql
- *    psql "$PG" -f sql/002_vrm_load_function.sql
+ *  ต้องรัน schema ก่อน:  npm run db:setup   (หรือ psql -f sql/001...  -f sql/002...  -f sql/003...)
  *
  *  ใช้งาน:
  *    node import-xlsx.js                         # หยิบไฟล์ .xlsx ใหม่สุดใน downloads/
@@ -16,10 +15,16 @@
  *    node import-xlsx.js file.xlsx --vendor 3263 --from 2026-07-01 --to 2026-07-31
  *    node import-xlsx.js file.xlsx --force       # โหลดซ้ำแม้ sha256 เดิมเคยโหลดแล้ว
  *    node import-xlsx.js file.xlsx --refresh-mv  # refresh rollup รายเดือนหลังโหลด
+ *    node import-xlsx.js file.xlsx --no-s3       # ข้ามการอัปโหลด S3 รอบนี้
  *
  *  ค่าเชื่อมต่อ DB อ่านจาก .env (คีย์เดียวกับ index.php):
  *    DB_HOST, DB_PORT, DB_NAME, DB_USER, DB_PASS   (หรือ DATABASE_URL / PG*)
  *    VRM_DB_SCHEMA=vrm  (เปลี่ยนชื่อ schema ได้)
+ *
+ *  เก็บไฟล์ต้นฉบับขึ้น S3 (optional — ไม่ตั้งค่าก็ทำงานต่อได้ปกติ แค่ข้ามขั้นนี้):
+ *    AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION, AWS_BUCKET
+ *    AWS_USE_PATH_STYLE_ENDPOINT=true|false, AWS_ENDPOINT (เผื่อ S3-compatible เช่น MinIO)
+ *    AWS_S3_PREFIX=vrm/sale-article-channel-type   (ค่าเริ่มต้น, override ด้วย --s3-prefix)
  * -----------------------------------------------------------------
  */
 
@@ -29,6 +34,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import * as XLSX from 'xlsx';
 import pg from 'pg';
+import { S3Client, PutObjectCommand } from '@aws-sdk/client-s3';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -60,10 +66,12 @@ for (let i = 0; i < argv.length; i++) {
   if (a === '--force') opt.force = true;
   else if (a === '--dry-run') opt.dryRun = true;
   else if (a === '--refresh-mv') opt.refreshMv = true;
+  else if (a === '--no-s3') opt.noS3 = true;
   else if (a === '--vendor') opt.vendor = argv[++i];
   else if (a === '--from') opt.from = argv[++i];
   else if (a === '--to') opt.to = argv[++i];
   else if (a === '--source') opt.source = argv[++i];
+  else if (a === '--s3-prefix') opt.s3Prefix = argv[++i];
   else if (!a.startsWith('--')) fileArg = a;
 }
 
@@ -94,6 +102,48 @@ function pgConfig() {
     user: process.env.DB_USER || process.env.PGUSER,
     password: process.env.DB_PASS || process.env.PGPASSWORD,
   };
+}
+
+// ---------- S3 (เก็บไฟล์ต้นฉบับ .xlsx ไว้ด้วย — optional) ----------
+// อ่าน env สไตล์เดียวกับ Laravel filesystems.php:
+//   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION, AWS_BUCKET,
+//   AWS_USE_PATH_STYLE_ENDPOINT, AWS_ENDPOINT (optional, เผื่อ S3-compatible เช่น MinIO)
+function s3Config() {
+  if (!process.env.AWS_BUCKET) return null; // ไม่ตั้งค่า -> ปิดฟีเจอร์นี้ไว้เฉยๆ
+  return {
+    bucket: process.env.AWS_BUCKET,
+    region: process.env.AWS_DEFAULT_REGION || process.env.AWS_REGION || 'ap-southeast-1',
+    endpoint: process.env.AWS_ENDPOINT || undefined,
+    forcePathStyle: String(process.env.AWS_USE_PATH_STYLE_ENDPOINT).toLowerCase() === 'true',
+    accessKeyId: process.env.AWS_ACCESS_KEY_ID,
+    secretAccessKey: process.env.AWS_SECRET_ACCESS_KEY,
+  };
+}
+
+/** อัปโหลดไฟล์ต้นฉบับขึ้น S3 แล้วคืน { key, url } */
+async function uploadToS3(cfg, buf, key) {
+  const client = new S3Client({
+    region: cfg.region,
+    endpoint: cfg.endpoint,
+    forcePathStyle: cfg.forcePathStyle,
+    credentials: cfg.accessKeyId
+      ? { accessKeyId: cfg.accessKeyId, secretAccessKey: cfg.secretAccessKey }
+      : undefined, // ไม่ตั้ง -> ให้ SDK หา credential เอง (env chain / instance role)
+  });
+  await client.send(new PutObjectCommand({
+    Bucket: cfg.bucket,
+    Key: key,
+    Body: buf,
+    ContentType: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  }));
+
+  const encodedKey = key.split('/').map(encodeURIComponent).join('/');
+  const url = cfg.endpoint
+    ? `${cfg.endpoint.replace(/\/+$/, '')}/${cfg.bucket}/${encodedKey}`
+    : cfg.forcePathStyle
+      ? `https://s3.${cfg.region}.amazonaws.com/${cfg.bucket}/${encodedKey}`
+      : `https://${cfg.bucket}.s3.${cfg.region}.amazonaws.com/${encodedKey}`;
+  return { key, url };
 }
 
 // ---------- แปลงค่า cell ----------
@@ -248,6 +298,27 @@ async function main() {
     const res = await client.query(`SELECT * FROM ${SCHEMA}.load_batch($1)`, [batchId]);
     const { deleted_rows, inserted_rows } = res.rows[0];
     log(`✅ load_batch เสร็จ — ลบของเดิม ${deleted_rows} แถว, upsert ${inserted_rows} แถว`);
+
+    // ----- เก็บไฟล์ต้นฉบับขึ้น S3 (ถ้าตั้งค่า AWS_BUCKET ไว้) -----
+    const s3cfg = s3Config();
+    if (s3cfg && !opt.noS3) {
+      const prefix = (opt.s3Prefix || process.env.AWS_S3_PREFIX || 'vrm/sale-article-channel-type')
+        .replace(/^\/+|\/+$/g, '');
+      const key = `${prefix}/${vendor}/${fileName}`;
+      try {
+        log(`อัปโหลด ${fileName} ขึ้น s3://${s3cfg.bucket}/${key} …`);
+        const { url } = await uploadToS3(s3cfg, buf, key);
+        await client.query(
+          `UPDATE ${SCHEMA}.import_batch SET s3_key = $2, file_url = $3 WHERE id = $1`,
+          [batchId, key, url]
+        );
+        log(`  ✓ ${url}`);
+      } catch (e) {
+        log(`  ⚠️ อัปโหลด S3 ไม่สำเร็จ (ข้อมูลใน DB โหลดสำเร็จแล้ว ไม่กระทบ): ${e.message}`);
+      }
+    } else if (!s3cfg) {
+      log('(ไม่ได้ตั้งค่า AWS_BUCKET — ข้ามการอัปโหลด S3)');
+    }
 
     if (opt.refreshMv) {
       log('refresh mv_article_channel_sales_monthly…');
