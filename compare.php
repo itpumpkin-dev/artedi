@@ -476,7 +476,7 @@ function fmt_date($v): string
                                         </select>
                                     </div>
                                     <div class="form-group col-md-2">
-                                        <label class="text-sm text-muted">จากวันที่ (PERIODDATE)</label>
+                                        <label class="text-sm text-muted">จากวันที่ (BILLING_DATE)</label>
                                         <input type="date" name="date_from" class="form-control form-control-sm"
                                             value="<?= h($f['date_from']) ?>">
                                     </div>

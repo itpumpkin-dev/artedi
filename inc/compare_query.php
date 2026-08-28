@@ -32,11 +32,11 @@ function compare_build_sql(array $f): array
 
     $where = [];
     if ($f['date_from'] !== '') {
-        $where[] = "NULLIF(s.perioddate, '')::date >= :date_from";
+        $where[] = "NULLIF(s.billing_date, '')::date >= :date_from";
         $params[':date_from'] = $f['date_from'];
     }
     if ($f['date_to'] !== '') {
-        $where[] = "NULLIF(s.perioddate, '')::date <= :date_to";
+        $where[] = "NULLIF(s.billing_date, '')::date <= :date_to";
         $params[':date_to'] = $f['date_to'];
     }
     if ($f['branch'] !== '') {

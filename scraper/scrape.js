@@ -96,6 +96,11 @@ function loadConfig(args) {
   if (args.channelType) cfg.export.channelType = args.channelType;
   if (args.mch3) cfg.export.mch3 = args.mch3;
 
+  // รองรับวันที่แบบสัมพัทธ์ (เช่น "today", "today-7") เพื่อให้ config.json ตั้งครั้งเดียว
+  // แล้วรันซ้ำทุกวันได้แบบ "ช่วงหมุน" (rolling window) โดยไม่ต้องแก้ไฟล์ทุกวัน
+  if (cfg.export.dateFrom) cfg.export.dateFrom = resolveRelativeDate(cfg.export.dateFrom, false);
+  if (cfg.export.dateTo) cfg.export.dateTo = resolveRelativeDate(cfg.export.dateTo, true);
+
   // ค่า default
   cfg.baseUrl = (cfg.baseUrl || 'https://vrm.homepro.co.th').replace(/\/+$/, '');
   cfg.downloadDir = path.resolve(__dirname, cfg.downloadDir || 'downloads');
@@ -114,6 +119,55 @@ function loadConfig(args) {
 // ==================== helper ====================
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const escapeRe = (s) => String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+const isoDate = (y, m1to12, d) => `${y}-${String(m1to12).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+const daysInMonth = (y, m1to12) => new Date(y, m1to12, 0).getDate();
+
+/**
+ * แปลงวันที่แบบสัมพัทธ์เป็น ISO date จริง — ใช้ตั้ง config.json ครั้งเดียวแล้วรันทุกวันได้:
+ *   "today"       -> วันนี้
+ *   "today-7"     -> วันนี้ย้อนหลัง 7 วัน / "today+1" -> +1 วัน
+ *   "this-month"  -> dateFrom = วันที่ 1 ของเดือนนี้, dateTo = วันนี้ (กันดึงวันที่ยังไม่ถึง)
+ *   "last-month"  -> เดือนก่อนหน้าเต็มเดือน (วันที่ 1 ถึงวันสุดท้ายของเดือน)
+ *   "2026-07"     -> เดือนที่ระบุเต็มเดือน (dateFrom=วันที่1, dateTo=วันสุดท้ายของเดือนนั้น)
+ * เดือนปฏิทินยาวไม่เกิน 31 วันอยู่แล้ว เลยไม่มีทางชนลิมิต "ไม่เกิน 31 วัน" ของ VRM
+ * ค่าอื่น (YYYY-MM-DD, DD/MM/YYYY) ปล่อยผ่านไม่แตะ
+ * @param {boolean} isEnd true = กำลัง resolve ค่า dateTo (มีผลกับ this-month/last-month/YYYY-MM)
+ */
+function resolveRelativeDate(v, isEnd) {
+  const s = String(v).trim();
+
+  let m = s.match(/^today\s*([+-]\s*\d+)?$/i);
+  if (m) {
+    const offsetDays = m[1] ? parseInt(m[1].replace(/\s/g, ''), 10) : 0;
+    const d = new Date();
+    d.setDate(d.getDate() + offsetDays);
+    return isoDate(d.getFullYear(), d.getMonth() + 1, d.getDate());
+  }
+
+  m = s.match(/^(this|last)-month$/i);
+  if (m) {
+    const now = new Date();
+    let y = now.getFullYear();
+    let mo = now.getMonth() + 1; // 1-12
+    if (m[1].toLowerCase() === 'last') {
+      mo -= 1;
+      if (mo === 0) { mo = 12; y -= 1; }
+    }
+    if (!isEnd) return isoDate(y, mo, 1);
+    if (m[1].toLowerCase() === 'this') return isoDate(y, mo, now.getDate()); // เดือนนี้ -> ถึงวันนี้เท่านั้น
+    return isoDate(y, mo, daysInMonth(y, mo)); // last-month -> เต็มเดือน
+  }
+
+  m = s.match(/^(\d{4})-(\d{2})$/); // ระบุเดือนตรง ๆ เช่น "2026-07" (ไม่มีวัน)
+  if (m) {
+    const y = parseInt(m[1], 10);
+    const mo = parseInt(m[2], 10);
+    return isoDate(y, mo, isEnd ? daysInMonth(y, mo) : 1);
+  }
+
+  return v; // YYYY-MM-DD / DD/MM/YYYY เดิม ปล่อยผ่าน
+}
 
 function toDMY(s) {
   s = String(s).trim();
@@ -488,6 +542,17 @@ async function main() {
 
   log(`เริ่ม — vendor=${cfg.vendorNo || '(auto)'} ` +
       `${cfg.export.dateFrom}..${cfg.export.dateTo} headless=${cfg.headless}`);
+
+  // VRM จำกัดช่วงวันที่ไม่เกิน 31 วัน/ครั้ง (นับรวมวันเริ่ม+วันจบ) — เตือนก่อนรันจริง
+  // กันเสียเวลารอ jobTimeoutMs เปล่า ๆ เพราะ dialog ไม่ยอม export ให้
+  const spanDays = Math.round(
+    (new Date(cfg.export.dateTo) - new Date(cfg.export.dateFrom)) / 86400000
+  ) + 1;
+  if (spanDays > 31) {
+    console.error(`\n❌ ช่วงวันที่ ${cfg.export.dateFrom}..${cfg.export.dateTo} = ${spanDays} วัน เกินลิมิต VRM (ไม่เกิน 31 วัน)`);
+    console.error(`   ถ้าใช้ today-N ให้ N ≤ 30 (today-N..today = N+1 วัน)\n`);
+    process.exit(1);
+  }
 
   const browser = await chromium.launch({ headless: cfg.headless, slowMo: cfg.slowMoMs });
   const context = await browser.newContext({ acceptDownloads: true });

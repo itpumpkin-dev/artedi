@@ -81,25 +81,39 @@ BEGIN
       AND f.period_date BETWEEN b.date_from AND b.date_to;
     GET DIAGNOSTICS v_deleted = ROW_COUNT;
 
+    -- หมายเหตุ: ไฟล์ export จาก VRM บางรอบมีแถวซ้ำคีย์เดียวกันเป๊ะ (เจอจริงกับ batch ที่มี
+    -- (period_date, site_no, art_no, sale_type) ซ้ำ 2 แถว ค่า qty/value ต่างกัน) —
+    -- ถ้า insert ตรง ๆ แล้ว ON CONFLICT จะ error "cannot affect row a second time"
+    -- เลย GROUP BY รวม (SUM qty/value) ก่อน insert กันไว้เผื่อเจอซ้ำอีก
     INSERT INTO vrm.article_channel_sales_daily
         (period_type, period_date, vendor_no, site_no, art_no, sale_type,
          qty, value, uom, billing_date, mch1, batch_id)
     SELECT
-        COALESCE(NULLIF(s.periodtype,''), 'D'),
-        s.perioddate::date,
-        s.vendorno,
-        s.siteno,
-        s.artno,
-        s.sale_type,
-        COALESCE(NULLIF(s.qty,   '')::numeric, 0),
-        COALESCE(NULLIF(s.value, '')::numeric, 0),
-        NULLIF(s.uom, ''),
-        NULLIF(s.billing_date, '')::date,
-        s.mch1,
+        period_type, period_date, vendor_no, site_no, art_no, sale_type,
+        SUM(qty)   AS qty,
+        SUM(value) AS value,
+        MAX(uom)          AS uom,
+        MAX(billing_date) AS billing_date,
+        MAX(mch1)         AS mch1,
         p_batch_id
-    FROM vrm.stg_article_channel_raw s
-    WHERE s.batch_id = p_batch_id
-      AND s.perioddate IS NOT NULL
+    FROM (
+        SELECT
+            COALESCE(NULLIF(s.periodtype, ''), 'D') AS period_type,
+            s.perioddate::date                       AS period_date,
+            s.vendorno                                AS vendor_no,
+            s.siteno                                  AS site_no,
+            s.artno                                   AS art_no,
+            s.sale_type,
+            COALESCE(NULLIF(s.qty,   '')::numeric, 0) AS qty,
+            COALESCE(NULLIF(s.value, '')::numeric, 0) AS value,
+            NULLIF(s.uom, '')                         AS uom,
+            NULLIF(s.billing_date, '')::date          AS billing_date,
+            s.mch1
+        FROM vrm.stg_article_channel_raw s
+        WHERE s.batch_id = p_batch_id
+          AND s.perioddate IS NOT NULL
+    ) x
+    GROUP BY period_type, period_date, vendor_no, site_no, art_no, sale_type
     ON CONFLICT (period_type, period_date, vendor_no, site_no, art_no, sale_type)
     DO UPDATE SET
         qty = EXCLUDED.qty, value = EXCLUDED.value, uom = EXCLUDED.uom,
@@ -111,7 +125,8 @@ BEGIN
     -- ปิด batch
     ---------------------------------------------------------------
     UPDATE vrm.import_batch
-       SET status      = 'loaded',
+       SET status        = 'loaded',
+           error_message = NULL, -- เผื่อเป็นการ retry batch ที่เคย fail ไว้ก่อนหน้า
            row_count   = (SELECT count(*) FROM vrm.stg_article_channel_raw WHERE batch_id = p_batch_id),
            exported_at = COALESCE(exported_at,
                           (SELECT to_timestamp(max(crdate), 'DD/MM/YYYY HH24:MI')
