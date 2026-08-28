@@ -9,6 +9,7 @@
     "scrape:headed": "node scrape.js --headed",
     "db:setup": "node setup-db.js",
     "import": "node import-xlsx.js",
+    "lark:list-chats": "node lark-notify.js --list-chats",
     "codegen": "playwright codegen https://vrm.homepro.co.th/auth/login",
     "install-browser": "playwright install chromium"
   },

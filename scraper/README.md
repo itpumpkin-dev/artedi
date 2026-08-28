@@ -67,13 +67,30 @@ node scrape.js --headed --from 2026-08-01 --to 2026-08-31 --vendor 501447 --chan
 
 อยากได้แบบ "ย้อนหลัง N วันแบบหมุน" (ไม่สนใจขอบเขตเดือน) แทนก็ยังใช้ `"today-N"` / `"today"` ได้เหมือนเดิม — เลือกแบบไหนก็ได้ตามที่สะดวก
 
-**ตั้งเวลารันจริง (Windows Task Scheduler)** — สร้าง Task ใหม่, Action = Start a program:
+**ตั้งเวลารันจริง (Windows Task Scheduler)** — ใช้ [run-daily.ps1](run-daily.ps1) เป็นตัวเรียก
+`npm run scrape` ต่อด้วย `npm run import -- --refresh-mv` (ถ้า scrape พังจะข้าม import ไปเลย
+กันโหลดไฟล์เก่า/ไฟล์ไม่มีซ้ำเข้า DB) พร้อม log แยกรายวันที่ `scraper/logs/daily_YYYYMMDD.log`
+และแจ้งเตือนเข้า Lark เมื่อสำเร็จ/ล้มเหลว (ดูหัวข้อถัดไป)
+
+สร้าง Task ด้วยคำสั่งเดียว (ไม่ต้องเปิด GUI):
+```powershell
+schtasks /create /tn "VRM_HomePro_Daily_ScrapeImport" `
+  /tr 'powershell.exe -NoProfile -ExecutionPolicy Bypass -File "C:\xampp\htdocs\Automations\art\scraper\run-daily.ps1"' `
+  /sc daily /st 06:00 /f
 ```
-Program/script:   node
-Arguments:        scrape.js && node import-xlsx.js --refresh-mv
-Start in:         C:\xampp\htdocs\Automations\art\scraper
+รันด้วย user ปัจจุบัน แบบ "Run only when user is logged on" (ไม่ต้องเก็บรหัสผ่าน Windows) —
+ถ้าอยากให้รันได้แม้ล็อกออก/ปิดเครื่อง ต้องเพิ่ม `/ru <user> /rp <password>` (จะถูกถามรหัสผ่าน)
+
+ตรวจสอบ/จัดการ:
+```powershell
+schtasks /query /tn "VRM_HomePro_Daily_ScrapeImport" /v   # ดูสถานะ + Last Result (0 = สำเร็จ)
+schtasks /run   /tn "VRM_HomePro_Daily_ScrapeImport"       # ทดสอบรันทันที ไม่ต้องรอ 06:00
+schtasks /delete /tn "VRM_HomePro_Daily_ScrapeImport" /f   # ลบ task
 ```
-Trigger: Daily เวลาที่ HomePro ปิดยอดวันก่อนหน้าเสร็จแล้ว (เช่น 06:00) — `&&` ต่อ import ให้รันเข้า DB ทันทีที่ scrape เสร็จ ไม่ต้องกดเอง
+
+**หมายเหตุเรื่อง encoding:** `run-daily.ps1` ต้องเซฟเป็น **UTF-8 with BOM** — Windows PowerShell
+(5.1, ตัวที่ Task Scheduler เรียก) อ่านไฟล์ `.ps1` ที่เป็น UTF-8 ไม่มี BOM ผิด parser จะพังทันที
+ถ้าแก้ไฟล์นี้แล้วเจอ error "Unexpected token" ทั้งที่ syntax ปกติ ให้เช็ค BOM ก่อน
 
 ## เมื่อ selector เพี้ยน
 
@@ -167,3 +184,51 @@ key ที่ได้: `{AWS_S3_PREFIX}/{vendorNo}/{fileName}` เช่น
 
 **หมายเหตุ:** ไม่ตั้ง ACL ให้ไฟล์เป็น public — url ที่ได้เข้าถึงได้หรือไม่ขึ้นกับ bucket policy ของคุณเอง
 (ต้องรัน `npm run db:setup` ใหม่หลังเพิ่มฟีเจอร์นี้ เพื่อให้ได้ `sql/003_vrm_add_s3_columns.sql`)
+
+## แจ้งเตือนเข้า Lark เมื่อ scrape/import สำเร็จหรือล้มเหลว
+
+`run-daily.ps1` เรียก [lark-notify.js](lark-notify.js) ส่งข้อความผ่าน Bot ของแอป (เช่น ediBOT)
+หลัง pipeline จบทุกครั้ง — ✅ ถ้าสำเร็จ, ❌ พร้อมข้อความ error ถ้าล้มเหลว — ส่งได้ 2 แบบ **ไม่จำเป็นต้องเป็นกลุ่ม**:
+
+- **DM หาคนคนเดียวด้วยอีเมล** — ง่ายสุด ไม่ต้องสร้าง/เชิญบอทเข้ากลุ่มเลย
+- **ส่งเข้ากลุ่ม** — ต้องเชิญบอทเข้ากลุ่มก่อน แล้วหา `chat_id`
+
+### ตั้งค่า (ครั้งเดียว)
+
+1. **Lark Developer Console** ของแอป (เช่น ediBOT) → **Permissions & Scopes** → เพิ่มสิทธิ์ส่งข้อความ
+   ในนาม bot (`im:message` / "Send messages as the app") → กด **Create version / Publish** ให้มีผลจริง
+2. ใส่ค่าใน `.env` (scraper/.env หรือ root .env) — เลือกแบบใดแบบหนึ่ง:
+
+   **แบบ DM (แนะนำถ้าอยากได้เร็วสุด):**
+   ```
+   LARK_APP_ID=cli_xxxxxxxxxxxxxxxx        # จากหน้า Credentials & Basic Info
+   LARK_APP_SECRET=xxxxxxxxxxxxxxxxxxxx    # กด 👁 เพื่อดู
+   LARK_RECEIVE_ID=you@company.com         # อีเมล Lark ของคนที่จะรับแจ้งเตือน
+   LARK_RECEIVE_ID_TYPE=email
+   ```
+
+   **แบบกลุ่ม:** เชิญบอทเข้ากลุ่มก่อน แล้ว
+   ```
+   LARK_APP_ID=cli_xxxxxxxxxxxxxxxx
+   LARK_APP_SECRET=xxxxxxxxxxxxxxxxxxxx
+   LARK_CHAT_ID=oc_xxxxxxxxxxxxxxxxxxxx    # หาได้ด้วย npm run lark:list-chats (ข้อ 3)
+   ```
+   ```
+   # LARK_DOMAIN=https://open.larksuite.com   (ค่าเริ่มต้น — เปลี่ยนเป็น open.feishu.cn ถ้าใช้ Feishu)
+   ```
+3. (เฉพาะแบบกลุ่ม) หา `chat_id`:
+   ```bash
+   npm run lark:list-chats
+   ```
+   จะ list กลุ่มทั้งหมดที่บอทอยู่ พร้อม chat_id — คัดลอกอันที่ต้องการมาใส่ `LARK_CHAT_ID`
+
+### ทดสอบส่ง
+
+```bash
+node lark-notify.js --text "ทดสอบแจ้งเตือน"                    # ใช้ค่าจาก .env
+node lark-notify.js --text "ทดสอบ" --email you@company.com     # DM คนนี้ตรง ๆ ไม่ต้องแก้ .env
+node lark-notify.js --text "ทดสอบ" --chat-id oc_xxx             # ส่งเข้ากลุ่มนี้ตรง ๆ
+```
+
+ไม่ตั้งค่าผู้รับไว้เลย = ข้ามการแจ้งเตือนเงียบ ๆ
+(ไม่ error, ไม่กระทบผลลัพธ์ของ scrape/import) — ส่งไม่สำเร็จก็เขียนแค่ใน log ไม่ทำให้ทั้ง pipeline นับว่าล้มเหลว

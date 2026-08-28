@@ -1,5 +1,6 @@
 node_modules/
 downloads/
 debug/
+logs/
 config.json
 .env

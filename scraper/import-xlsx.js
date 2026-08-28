@@ -57,6 +57,15 @@ loadDotenv(path.join(__dirname, '..', '.env'));
 const log = (...a) => console.log(new Date().toISOString().slice(11, 19), ...a);
 const SCHEMA = (process.env.VRM_DB_SCHEMA || 'vrm').replace(/[^a-zA-Z0-9_]/g, '');
 
+/** เขียนสรุปผลรันล่าสุดไว้ที่ logs/last-run-summary.json ให้ run-daily.ps1 อ่านไปแจ้งเตือน Lark แบบละเอียด */
+function writeRunSummary(obj) {
+  try {
+    const dir = path.join(__dirname, 'logs');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'last-run-summary.json'), JSON.stringify(obj, null, 2));
+  } catch { /* เขียนไม่ได้ก็ไม่เป็นไร ไม่กระทบผลลัพธ์หลัก */ }
+}
+
 // ---------- args ----------
 const argv = process.argv.slice(2);
 const opt = { force: false, refreshMv: false, dryRun: false };
@@ -301,6 +310,7 @@ async function main() {
 
     // ----- เก็บไฟล์ต้นฉบับขึ้น S3 (ถ้าตั้งค่า AWS_BUCKET ไว้) -----
     const s3cfg = s3Config();
+    let s3Url = null;
     if (s3cfg && !opt.noS3) {
       const prefix = (opt.s3Prefix || process.env.AWS_S3_PREFIX || 'vrm/sale-article-channel-type')
         .replace(/^\/+|\/+$/g, '');
@@ -308,6 +318,7 @@ async function main() {
       try {
         log(`อัปโหลด ${fileName} ขึ้น s3://${s3cfg.bucket}/${key} …`);
         const { url } = await uploadToS3(s3cfg, buf, key);
+        s3Url = url;
         await client.query(
           `UPDATE ${SCHEMA}.import_batch SET s3_key = $2, file_url = $3 WHERE id = $1`,
           [batchId, key, url]
@@ -332,6 +343,22 @@ async function main() {
     }
 
     log(`เสร็จสมบูรณ์ — batch #${batchId}`);
+
+    // ----- เขียนสรุปผลไว้ให้ run-daily.ps1 อ่านไปแจ้งเตือน Lark แบบละเอียด -----
+    writeRunSummary({
+      ok: true,
+      timestamp: new Date().toISOString(),
+      fileName,
+      vendor,
+      periodType,
+      dateFrom: from,
+      dateTo: to,
+      rowsRead: rows.length,
+      batchId,
+      deletedRows: deleted_rows,
+      insertedRows: inserted_rows,
+      s3Url,
+    });
   } catch (err) {
     console.error('\n❌ ล้มเหลว:', err.message);
     // มี batch ที่ค้าง 'loading' ให้ mark failed
@@ -342,6 +369,7 @@ async function main() {
         [sha256, String(err.message).slice(0, 1000)]
       );
     } catch {}
+    writeRunSummary({ ok: false, timestamp: new Date().toISOString(), fileName, error: err.message });
     process.exitCode = 1;
   } finally {
     await client.end();
