@@ -90,6 +90,9 @@ function guessType(id, forcedType) {
   return id.includes('@') ? 'email' : 'chat_id';
 }
 
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const THROTTLE_MS = 300; // หน่วงระหว่างคน ~3 request/วิ กันชน rate limit ของ Lark เวลาส่งหาหลายคน
+
 async function sendToOne(token, id, type, text) {
   const res = await fetch(`${DOMAIN}/open-apis/im/v1/messages?receive_id_type=${encodeURIComponent(type)}`, {
     method: 'POST',
@@ -105,9 +108,25 @@ async function sendToOne(token, id, type, text) {
   });
   const data = await res.json();
   if (data.code !== 0) {
-    throw new Error(`[${data.code}] ${data.msg}`);
+    const err = new Error(`[${data.code}] ${data.msg}`);
+    err.status = res.status;
+    err.code = data.code;
+    throw err;
   }
   return data;
+}
+
+const isRateLimit = (e) => e.status === 429 || /frequency|too many request|rate limit/i.test(e.message || '');
+
+/** ส่ง 1 คน ถ้าโดน rate limit รอ 2 วิแล้วลองใหม่อีกรอบเดียว ก่อนยอมแพ้ */
+async function sendWithRetry(token, id, type, text) {
+  try {
+    return await sendToOne(token, id, type, text);
+  } catch (e) {
+    if (!isRateLimit(e)) throw e;
+    await sleep(2000);
+    return sendToOne(token, id, type, text);
+  }
 }
 
 /**
@@ -130,10 +149,12 @@ export async function sendLarkMessage(text, receiveId, receiveIdType) {
 
   const token = await getTenantAccessToken();
   const results = [];
-  for (const id of ids) {
+  for (let i = 0; i < ids.length; i++) {
+    const id = ids[i];
     const type = guessType(id, forcedType);
+    if (i > 0) await sleep(THROTTLE_MS); // หน่วงก่อนคนถัดไป (ไม่หน่วงก่อนคนแรก)
     try {
-      await sendToOne(token, id, type, text);
+      await sendWithRetry(token, id, type, text);
       console.log(`  ✓ ส่งถึง ${id} (${type})`);
       results.push({ id, type, ok: true });
     } catch (e) {

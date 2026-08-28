@@ -310,7 +310,7 @@ $rawMessages = $rawStmt->fetchAll();
                     <i class="fab fa-line"></i>
                     <span class="brand-text font-weight-light">Line Auto ART รวม</span>
                 </a>
-                <span class="badge badge-light ml-2">ยังไม่รวมข้อมูลจาก edi</span>
+                <!-- <span class="badge badge-light ml-2">ยังไม่รวมข้อมูลจาก edi</span> -->
 
                 <ul class="navbar-nav ml-auto">
                     <li class="nav-item">
