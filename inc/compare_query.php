@@ -14,11 +14,13 @@
 /** ดึงรายการ import batch ที่โหลดสำเร็จแล้ว (ใหม่สุดก่อน) ไว้ทำ dropdown เลือก */
 function compare_list_batches(PDO $pdo): array
 {
+    // จำกัดไว้ที่ 200 รายการล่าสุด (~6-7 เดือนถ้ารันวันละ 1 batch) กัน dropdown โตไม่มีที่สิ้นสุด
     return $pdo->query("
         SELECT id, vendor_no, period_type, date_from, date_to, file_name, row_count, created_at
         FROM vrm.import_batch
         WHERE status = 'loaded'
         ORDER BY id DESC
+        LIMIT 200
     ")->fetchAll();
 }
 

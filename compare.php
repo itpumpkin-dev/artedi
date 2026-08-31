@@ -95,6 +95,9 @@ function fmt_date($v): string
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.2/css/all.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/admin-lte@3.2.0/dist/css/adminlte.min.css">
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/datatables.net-bs4@1.13.7/css/dataTables.bootstrap4.min.css">
+    <!-- Select2 (dropdown เลือก batch — ค้นหาได้ + เลื่อนดูได้เมื่อมีตัวเลือกเยอะ) -->
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/css/select2.min.css">
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/select2-bootstrap4-theme@1.5.2/dist/select2-bootstrap4.min.css">
 
     <style>
         body,
@@ -214,6 +217,12 @@ function fmt_date($v): string
         .text-diff-neg {
             color: #1e7e34;
             font-weight: 600;
+        }
+
+        /* บังคับให้ dropdown เลือก batch (Select2) เลื่อนดูภายในเมื่อรายการยาว แทนที่จะยืดจอไปเรื่อย ๆ */
+        .select2-container--bootstrap4 .select2-results > .select2-results__options {
+            max-height: 320px !important;
+            overflow-y: auto !important;
         }
 
         /* Loading overlay — ตอนโหลด/กรองข้อมูล หรือตอน DataTables กำลังสร้างตาราง */
@@ -466,7 +475,7 @@ function fmt_date($v): string
                                 <form method="get" class="form-row align-items-end">
                                     <div class="form-group col-md-3">
                                         <label class="text-sm text-muted">ไฟล์ที่ import (batch)</label>
-                                        <select name="batch_id" class="form-control form-control-sm">
+                                        <select id="batch-select" name="batch_id" class="form-control form-control-sm">
                                             <?php foreach ($f['batches'] as $b): ?>
                                                 <option value="<?= h($b['id']) ?>" <?= (int) $b['id'] === (int) $f['batch_id'] ? 'selected' : '' ?>>
                                                     #<?= h($b['id']) ?> — <?= h($b['date_from']) ?> ถึง <?= h($b['date_to']) ?>
@@ -641,12 +650,25 @@ function fmt_date($v): string
     <!-- DataTables -->
     <script src="https://cdn.jsdelivr.net/npm/datatables.net@1.13.7/js/jquery.dataTables.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/datatables.net-bs4@1.13.7/js/dataTables.bootstrap4.min.js"></script>
+    <!-- Select2 -->
+    <script src="https://cdn.jsdelivr.net/npm/select2@4.0.13/dist/js/select2.min.js"></script>
 
     <script>
         function showLoading() { $('#loading-overlay').css('display', 'flex'); }
         function hideLoading() { $('#loading-overlay').hide(); }
 
         $(function () {
+            // dropdown เลือก batch — ค้นหาได้ + จำกัดความสูงตอนเปิด แล้วเลื่อนดูได้ (กันปัญหา list ยาวจนล้นจอ)
+            $('#batch-select').select2({
+                theme: 'bootstrap4',
+                width: '100%',
+                dropdownAutoWidth: false,
+                placeholder: 'เลือกไฟล์ที่ import',
+                language: {
+                    noResults: function () { return 'ไม่พบ batch ที่ตรงกัน'; },
+                    searching: function () { return 'กำลังค้นหา...'; }
+                }
+            });
             var thaiLang = {
                 "sProcessing": "กำลังดำเนินการ...",
                 "sLengthMenu": "แสดง _MENU_ แถว",
