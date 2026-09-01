@@ -478,12 +478,17 @@ $rawMessages = $rawStmt->fetchAll();
                     </div>
 
                     <!-- Log ข้อความดิบ -->
-                    <div class="card card-secondary card-outline">
+                    <div class="card card-secondary card-outline collapsed-card">
                         <div class="card-header">
                             <h3 class="card-title">
                                 <i class="fas fa-inbox"></i>
                                 ข้อความล่าสุดจากกลุ่ม (Log ดิบ 50 รายการล่าสุด — สำหรับตรวจสอบว่าข้อความไหน parse ไม่ผ่าน)
                             </h3>
+                            <div class="card-tools">
+                                <button type="button" class="btn btn-tool" data-card-widget="collapse">
+                                    <i class="fas fa-plus"></i>
+                                </button>
+                            </div>
                         </div>
                         <div class="card-body table-responsive p-0">
                             <?php if (count($rawMessages) === 0): ?>

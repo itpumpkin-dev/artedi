@@ -369,7 +369,7 @@ function fmt_date($v): string
                                 <i class="fas fa-balance-scale"></i> เทียบข้อมูล Excel (VRM) กับ LINE
                             </h1>
                             <p class="text-muted mb-0">
-                                เอาข้อมูล Excel ดิบทุกแถว/ทุกคอลัมน์เป็นตัวตั้ง แล้วแปะคอลัมน์จาก LINE
+                                เอาข้อมูล Raw Excel จาก Edi ทุกแถว/ทุกคอลัมน์เป็นตัวตั้งแล้วแปะคอลัมน์จาก LINE
                                 (<span class="col-line px-1">พื้นฟ้า</span>) ข้าง ๆ คอลัมน์ที่เทียบกันได้
                                 พร้อมคอลัมน์ <span class="badge" style="background:#fff6cc">diff</span> = VALUE − amount
                             </p>
