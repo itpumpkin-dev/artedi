@@ -17,68 +17,35 @@
  */
 
 require __DIR__ . '/inc/db.php'; // โหลด .env, เชื่อมต่อ DB, ฟังก์ชัน h()/fmt_dt() (ใช้ร่วมกับ compare.php)
+require __DIR__ . '/inc/order_query.php';
+
+const ORDER_ROW_LIMIT = 200; // จำกัดแถวที่โชว์บนหน้าจอ กันตารางหนักเกินไป — กด Export เพื่อดาวน์โหลดครบทุกแถว
 
 // ---------- รับค่า filter จาก URL (ทำ whitelist / prepared statement กัน SQL injection) ----------
-$groupId  = $_GET['group_id']  ?? '';
-$sku      = $_GET['sku']       ?? '';
-$dateFrom = $_GET['date_from'] ?? '';
-$dateTo   = $_GET['date_to']   ?? '';
-
-$where  = [];
-$params = [];
-
-if ($groupId !== '') {
-    $where[] = 'o.group_id = :group_id';
-    $params[':group_id'] = $groupId;
-}
-if ($sku !== '') {
-    $where[] = 'o.sku ILIKE :sku';
-    $params[':sku'] = '%' . $sku . '%';
-}
-if ($dateFrom !== '') {
-    $where[] = 'o.parsed_at >= :date_from';
-    $params[':date_from'] = $dateFrom . ' 00:00:00';
-}
-if ($dateTo !== '') {
-    $where[] = 'o.parsed_at <= :date_to';
-    $params[':date_to'] = $dateTo . ' 23:59:59';
-}
-
-$whereSql = count($where) > 0 ? 'WHERE ' . implode(' AND ', $where) : '';
+$f = order_read_filters();
+$groupId  = $f['group_id'];
+$sku      = $f['sku'];
+$dateFrom = $f['date_from'];
+$dateTo   = $f['date_to'];
 
 // ---------- ดึงข้อมูลออเดอร์ที่ parse แล้ว พร้อม join ชื่อกลุ่ม/ชื่อผู้ส่ง ----------
-$sql = "
-    SELECT
-        o.id,
-        o.message_id,
-        o.order_date,
-        o.order_date_iso,
-        o.branch_code,
-        o.sku,
-        o.quantity,
-        o.amount,
-        o.raw_text,
-        o.parsed_at,
-        g.group_name,
-        o.group_id,
-        u.display_name,
-        o.user_id
-    FROM line_order_messages o
-    LEFT JOIN line_groups g ON g.group_id = o.group_id
-    LEFT JOIN line_users  u ON u.user_id  = o.user_id
-    {$whereSql}
-    ORDER BY o.order_date_iso DESC NULLS LAST, o.parsed_at DESC
-    LIMIT 200
-";
+[$sql, $params] = order_build_sql($f);
 
-$stmt = $pdo->prepare($sql);
+$countStmt = $pdo->prepare("SELECT COUNT(*) FROM ({$sql}) t");
+$countStmt->execute($params);
+$totalOrdersAll = (int) $countStmt->fetchColumn();
+
+$stmt = $pdo->prepare($sql . ' LIMIT ' . ORDER_ROW_LIMIT);
 $stmt->execute($params);
 $orders = $stmt->fetchAll();
 
-// ---------- สรุปยอดรวม (ตาม filter ปัจจุบัน) ----------
-$totalOrders = count($orders);
-$totalAmount = array_sum(array_column($orders, 'amount'));
-$totalQty    = array_sum(array_column($orders, 'quantity'));
+// ---------- สรุปยอดรวม (ตาม filter ปัจจุบัน — รวมทุกแถวที่ตรงเงื่อนไข ไม่ใช่แค่ที่โชว์บนหน้าจอ) ----------
+$totalOrders = $totalOrdersAll;
+$sumStmt = $pdo->prepare("SELECT COALESCE(SUM(amount), 0) AS sum_amount, COALESCE(SUM(quantity), 0) AS sum_qty FROM ({$sql}) t");
+$sumStmt->execute($params);
+$sums        = $sumStmt->fetch();
+$totalAmount = (float) $sums['sum_amount'];
+$totalQty    = (float) $sums['sum_qty'];
 
 // ---------- ดึง log ข้อความดิบล่าสุด (เผื่อ debug ว่าข้อความไหน parse ไม่ผ่าน) ----------
 $rawStmt = $pdo->query("
@@ -348,6 +315,21 @@ $rawMessages = $rawStmt->fetchAll();
                                 <i class="fas fa-balance-scale"></i> เทียบข้อมูล
                             </a>
                         </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="pivot_vrm.php">
+                                <i class="fas fa-table"></i> Pivot VRM
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="pivot_sale_report.php">
+                                <i class="fas fa-chart-pie"></i> Pivot SaleReport
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="pivot_summary.php">
+                                <i class="fas fa-check-double"></i> Summary
+                            </a>
+                        </li>
                     </ul>
                 </div>
             </div>
@@ -425,6 +407,9 @@ $rawMessages = $rawStmt->fetchAll();
                                     <a href="?" class="btn btn-default btn-sm">
                                         <i class="fas fa-times"></i> ล้างตัวกรอง
                                     </a>
+                                    <a href="order_export.php?<?= h(order_query_string($f)) ?>" class="btn btn-success btn-sm">
+                                        <i class="fas fa-file-excel"></i> Export
+                                    </a>
                                 </div>
                             </form>
                         </div>
@@ -434,13 +419,22 @@ $rawMessages = $rawStmt->fetchAll();
                     <div class="card">
                         <div class="card-header">
                             <h3 class="card-title">
-                                <i class="fas fa-table"></i> ออเดอร์ (<?= h(number_format($totalOrders)) ?> รายการ)
+                                <i class="fas fa-table"></i> ออเดอร์ (แสดง <?= h(number_format(count($orders))) ?> จาก <?= h(number_format($totalOrders)) ?> รายการ)
                             </h3>
                         </div>
                         <div class="card-body table-responsive p-0">
                             <?php if ($totalOrders === 0): ?>
                                 <div class="p-4 text-center text-muted">ไม่พบข้อมูลตามเงื่อนไขที่กรองไว้</div>
                             <?php else: ?>
+                                <?php if ($totalOrders > ORDER_ROW_LIMIT): ?>
+                                    <div class="px-3 pt-3">
+                                        <small class="text-muted d-block">
+                                            <i class="fas fa-info-circle"></i>
+                                            แสดงบนหน้าจอสูงสุด <?= number_format(ORDER_ROW_LIMIT) ?> แถว (ตัวกรองปัจจุบันมี <?= number_format($totalOrders) ?> แถว)
+                                            — กด "Export" เพื่อดาวน์โหลดครบทุกแถว
+                                        </small>
+                                    </div>
+                                <?php endif; ?>
                                 <table id="orders-table" class="table table-hover table-striped text-nowrap mb-0">
                                     <thead>
                                         <tr>

@@ -38,12 +38,13 @@ if ($f['batch_id'] === null) {
 
         $sumStmt = $pdo->prepare("
             SELECT
-                COUNT(*)                                            AS n_total,
-                COUNT(*) FILTER (WHERE order_date IS NOT NULL)      AS n_matched,
-                COUNT(*) FILTER (WHERE order_date IS NULL)          AS n_unmatched,
-                COALESCE(SUM(diff) FILTER (WHERE order_date IS NOT NULL), 0) AS sum_diff_matched,
-                COALESCE(SUM(NULLIF(value, '')::numeric), 0)        AS sum_value,
-                COALESCE(SUM(amount), 0)                            AS sum_amount
+                COUNT(*)                                             AS n_total,
+                COUNT(*) FILTER (WHERE is_match)                     AS n_matched,
+                COUNT(*) FILTER (WHERE NOT is_match)                 AS n_unmatched,
+                COALESCE(SUM(qty_diff) FILTER (WHERE li_present IS NOT NULL), 0)    AS sum_qty_diff_matched,
+                COALESCE(SUM(amount_diff) FILTER (WHERE li_present IS NOT NULL), 0) AS sum_amount_diff_matched,
+                COALESCE(SUM(NULLIF(value, '')::numeric), 0)         AS sum_value,
+                COALESCE(SUM(amount), 0)                             AS sum_amount
             FROM ({$sql}) t
         ");
         $sumStmt->execute($params);
@@ -54,7 +55,7 @@ if ($f['batch_id'] === null) {
     }
 }
 
-/** สร้าง query string สำหรับปุ่ม/ลิงก์ export โดยคงค่า filter ปัจจุบันไว้ */
+/** สร้าง query string สำหรับปุ่ม/ลิงก์ export โดยคงค่า filter ปัจจุบันไว้ (รวมทั้ง match key / value field ที่เลือก) */
 function compare_query_string(array $f): string
 {
     return http_build_query(array_filter([
@@ -64,7 +65,11 @@ function compare_query_string(array $f): string
         'branch'    => $f['branch'],
         'sku'       => $f['sku'],
         'only_diff' => $f['only_diff'] ? 1 : '',
-    ], fn($v) => $v !== '' && $v !== null));
+        'mk_submitted' => 1,
+        'mk'           => $f['match_keys'],
+        'vf_submitted' => 1,
+        'vf'           => $f['value_fields'],
+    ], fn($v) => $v !== '' && $v !== null && $v !== []));
 }
 
 /** format ตัวเลขจาก string/null ให้อ่านง่าย หรือ "-" ถ้าไม่มีค่า */
@@ -371,7 +376,9 @@ function fmt_date($v): string
                             <p class="text-muted mb-0">
                                 เอาข้อมูล Raw Excel จาก Edi ทุกแถว/ทุกคอลัมน์เป็นตัวตั้งแล้วแปะคอลัมน์จาก LINE
                                 (<span class="col-line px-1">พื้นฟ้า</span>) ข้าง ๆ คอลัมน์ที่เทียบกันได้
-                                พร้อมคอลัมน์ <span class="badge" style="background:#fff6cc">diff</span> = VALUE − amount
+                                พร้อมคอลัมน์ <span class="badge" style="background:#fff6cc">diff</span> = ฝั่ง Excel − ฝั่ง LINE
+                                — เลือกได้ในตัวกรองด้านล่างว่าจะเทียบด้วยข้อมูลอะไรบ้าง (match key / value field)
+                                ถือว่า "ตรงกับ LINE" ก็ต่อเมื่อค่าตรงกันครบ<b>ทุกคู่</b>ที่เลือกไว้ — ถ้ามีคู่ไหนไม่ตรงแม้แค่ตัวเดียว จะนับเป็นไม่ตรงทันที
                             </p>
                         </div>
                     </div>
@@ -384,6 +391,21 @@ function fmt_date($v): string
                         <li class="nav-item">
                             <a class="nav-link active" href="compare.php">
                                 <i class="fas fa-balance-scale"></i> เทียบข้อมูล
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="pivot_vrm.php">
+                                <i class="fas fa-table"></i> Pivot VRM
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="pivot_sale_report.php">
+                                <i class="fas fa-chart-pie"></i> Pivot SaleReport
+                            </a>
+                        </li>
+                        <li class="nav-item">
+                            <a class="nav-link" href="pivot_summary.php">
+                                <i class="fas fa-check-double"></i> Summary
                             </a>
                         </li>
                     </ul>
@@ -418,7 +440,7 @@ function fmt_date($v): string
                                 <div class="small-box bg-success">
                                     <div class="inner">
                                         <h3><?= h(number_format($summary['n_matched'] ?? 0)) ?></h3>
-                                        <p>จับคู่กับ LINE ได้</p>
+                                        <p>ตรงกับ LINE ครบทุกฟิลด์ที่เลือก</p>
                                     </div>
                                     <div class="icon"><i class="fas fa-link"></i></div>
                                 </div>
@@ -427,7 +449,7 @@ function fmt_date($v): string
                                 <div class="small-box bg-danger">
                                     <div class="inner">
                                         <h3><?= h(number_format($summary['n_unmatched'] ?? 0)) ?></h3>
-                                        <p>ไม่มีใน LINE</p>
+                                        <p>ไม่ตรง/ไม่มีใน LINE</p>
                                     </div>
                                     <div class="icon"><i class="fas fa-unlink"></i></div>
                                 </div>
@@ -441,24 +463,37 @@ function fmt_date($v): string
                                     <div class="icon"><i class="fas fa-file-invoice-dollar"></i></div>
                                 </div>
                             </div>
-                            <div class="col-md-2 col-sm-6">
-                                <div class="small-box bg-warning">
-                                    <div class="inner">
-                                        <h3>฿<?= h(number_format($summary['sum_amount'] ?? 0, 2)) ?></h3>
-                                        <p>ยอดเงินรวม (amount)</p>
+                            <?php if (in_array('amount', $f['value_fields'], true)): ?>
+                                <div class="col-md-2 col-sm-6">
+                                    <div class="small-box bg-warning">
+                                        <div class="inner">
+                                            <h3>฿<?= h(number_format($summary['sum_amount'] ?? 0, 2)) ?></h3>
+                                            <p>ยอดเงินรวม (amount)</p>
+                                        </div>
+                                        <div class="icon"><i class="fab fa-line"></i></div>
                                     </div>
-                                    <div class="icon"><i class="fab fa-line"></i></div>
                                 </div>
-                            </div>
-                            <div class="col-md-2 col-sm-6">
-                                <div class="small-box bg-dark">
-                                    <div class="inner">
-                                        <h3>฿<?= h(number_format($summary['sum_diff_matched'] ?? 0, 2)) ?></h3>
-                                        <p>ผลรวม diff (เฉพาะที่จับคู่ได้)</p>
+                                <div class="col-md-2 col-sm-6">
+                                    <div class="small-box bg-dark">
+                                        <div class="inner">
+                                            <h3>฿<?= h(number_format($summary['sum_amount_diff_matched'] ?? 0, 2)) ?></h3>
+                                            <p>ผลรวม amount diff (เฉพาะที่จับคู่ได้)</p>
+                                        </div>
+                                        <div class="icon"><i class="fas fa-coins"></i></div>
                                     </div>
-                                    <div class="icon"><i class="fas fa-coins"></i></div>
                                 </div>
-                            </div>
+                            <?php endif; ?>
+                            <?php if (in_array('qty', $f['value_fields'], true)): ?>
+                                <div class="col-md-2 col-sm-6">
+                                    <div class="small-box bg-dark">
+                                        <div class="inner">
+                                            <h3><?= h(number_format($summary['sum_qty_diff_matched'] ?? 0, 2)) ?></h3>
+                                            <p>ผลรวม qty diff (เฉพาะที่จับคู่ได้)</p>
+                                        </div>
+                                        <div class="icon"><i class="fas fa-boxes"></i></div>
+                                    </div>
+                                </div>
+                            <?php endif; ?>
                         </div>
 
                         <!-- ตัวกรอง -->
@@ -525,7 +560,50 @@ function fmt_date($v): string
                                             </label>
                                         </div>
                                     </div>
+
+                                    <hr class="w-100 my-3">
+
+                                    <input type="hidden" name="mk_submitted" value="1">
+                                    <input type="hidden" name="vf_submitted" value="1">
+
+                                    <div class="form-group col-md-6 mb-0">
+                                        <label class="text-sm text-muted d-block">
+                                            <i class="fas fa-key"></i> ใช้จับคู่แถว (match key) — ต้องเลือกอย่างน้อย 1 ตัว
+                                        </label>
+                                        <?php foreach (compare_match_key_options() as $key => $label): ?>
+                                            <div class="custom-control custom-checkbox custom-control-inline">
+                                                <input type="checkbox" class="custom-control-input" id="mk_<?= h($key) ?>"
+                                                    name="mk[]" value="<?= h($key) ?>"
+                                                    <?= in_array($key, $f['match_keys'], true) ? 'checked' : '' ?>>
+                                                <label class="custom-control-label text-sm" for="mk_<?= h($key) ?>"><?= h($label) ?></label>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
+                                    <div class="form-group col-md-6 mb-0">
+                                        <label class="text-sm text-muted d-block">
+                                            <i class="fas fa-balance-scale-right"></i> ใช้เทียบยอด/คำนวณ diff (value field)
+                                        </label>
+                                        <?php foreach (compare_value_field_options() as $key => $label): ?>
+                                            <div class="custom-control custom-checkbox custom-control-inline">
+                                                <input type="checkbox" class="custom-control-input" id="vf_<?= h($key) ?>"
+                                                    name="vf[]" value="<?= h($key) ?>"
+                                                    <?= in_array($key, $f['value_fields'], true) ? 'checked' : '' ?>>
+                                                <label class="custom-control-label text-sm" for="vf_<?= h($key) ?>"><?= h($label) ?></label>
+                                            </div>
+                                        <?php endforeach; ?>
+                                    </div>
                                 </form>
+                                <?php if (count($f['match_keys']) < count(compare_match_key_options())): ?>
+                                    <small class="text-warning d-block mt-2">
+                                        <i class="fas fa-exclamation-triangle"></i>
+                                        Match key ที่เลือกน้อยกว่าปกติ — ยอด LINE ที่แปะข้าง ๆ จะเป็นยอดรวมข้าม
+                                        <?php
+                                        $dropped = array_diff(array_keys(compare_match_key_options()), $f['match_keys']);
+                                        echo h(implode(', ', array_map(fn($k) => compare_match_key_options()[$k], $dropped)));
+                                        ?>
+                                        (ไม่ได้แยกเฉพาะแถวนั้นแล้ว)
+                                    </small>
+                                <?php endif; ?>
                                 <?php if ($totalRows >= ROW_LIMIT): ?>
                                     <small class="text-muted d-block mt-2">
                                         <i class="fas fa-info-circle"></i>
@@ -547,6 +625,13 @@ function fmt_date($v): string
                                 <?php if (count($rows) === 0): ?>
                                     <div class="p-4 text-center text-muted">ไม่พบข้อมูลตามเงื่อนไขที่กรองไว้</div>
                                 <?php else: ?>
+                                    <?php
+                                    $hasDate   = in_array('date', $f['match_keys'], true);
+                                    $hasBranch = in_array('branch', $f['match_keys'], true);
+                                    $hasSku    = in_array('sku', $f['match_keys'], true);
+                                    $hasQty    = in_array('qty', $f['value_fields'], true);
+                                    $hasAmount = in_array('amount', $f['value_fields'], true);
+                                    ?>
                                     <table id="compare-table" class="table table-hover table-striped text-nowrap mb-0">
                                         <thead>
                                             <tr>
@@ -555,11 +640,11 @@ function fmt_date($v): string
                                                 <th>PERIODTYPE</th>
                                                 <th>PERIODDATE</th>
                                                 <th>BILLING_DATE</th>
-                                                <th class="col-line">order_date (Line)</th>
+                                                <?php if ($hasDate): ?><th class="col-line">order_date (Line)</th><?php endif; ?>
                                                 <th>VENDORNO</th>
                                                 <th>VENDORNAME</th>
                                                 <th>SITENO</th>
-                                                <th class="col-line">branch_code (Line)</th>
+                                                <?php if ($hasBranch): ?><th class="col-line">branch_code (Line)</th><?php endif; ?>
                                                 <th>SITENAME</th>
                                                 <th>MCH3</th>
                                                 <th>MCH3DESC</th>
@@ -571,12 +656,13 @@ function fmt_date($v): string
                                                 <th>ARTDESC</th>
                                                 <th>ARTEAN</th>
                                                 <th>VDARTDESC</th>
-                                                <th class="col-line">sku (Line)</th>
+                                                <?php if ($hasSku): ?><th class="col-line">sku (Line)</th><?php endif; ?>
                                                 <th class="text-right">QTY</th>
-                                                <th class="text-right col-line">quantity (Line)</th>
+                                                <?php if ($hasQty): ?><th class="text-right col-line">quantity (Line)</th><?php endif; ?>
                                                 <th class="text-right">VALUE</th>
-                                                <th class="text-right col-line">amount (Line)</th>
-                                                <th class="text-right col-diff">diff</th>
+                                                <?php if ($hasAmount): ?><th class="text-right col-line">amount (Line)</th><?php endif; ?>
+                                                <?php if ($hasQty): ?><th class="text-right col-diff">qty diff</th><?php endif; ?>
+                                                <?php if ($hasAmount): ?><th class="text-right col-diff">amount diff</th><?php endif; ?>
                                                 <th>UOM</th>
                                                 <th>VDARTNO</th>
                                                 <th>SALE_TYPE</th>
@@ -585,8 +671,10 @@ function fmt_date($v): string
                                         <tbody>
                                             <?php foreach ($rows as $r): ?>
                                                 <?php
-                                                $diff = $r['diff'] !== null ? (float) $r['diff'] : null;
-                                                $diffClass = $diff === null ? '' : ($diff > 0.004 ? 'text-diff-pos' : ($diff < -0.004 ? 'text-diff-neg' : ''));
+                                                $qtyDiff = $r['qty_diff'] !== null ? (float) $r['qty_diff'] : null;
+                                                $qtyDiffClass = $qtyDiff === null ? '' : ($qtyDiff > 0.004 ? 'text-diff-pos' : ($qtyDiff < -0.004 ? 'text-diff-neg' : ''));
+                                                $amountDiff = $r['amount_diff'] !== null ? (float) $r['amount_diff'] : null;
+                                                $amountDiffClass = $amountDiff === null ? '' : ($amountDiff > 0.004 ? 'text-diff-pos' : ($amountDiff < -0.004 ? 'text-diff-neg' : ''));
                                                 ?>
                                                 <tr>
                                                     <td data-label="TODAY"><?= h($r['today']) ?></td>
@@ -594,11 +682,11 @@ function fmt_date($v): string
                                                     <td data-label="PERIODTYPE"><?= h($r['periodtype']) ?></td>
                                                     <td data-label="PERIODDATE" data-order="<?= h($r['perioddate']) ?>"><?= h(fmt_date($r['perioddate'])) ?></td>
                                                     <td data-label="BILLING_DATE" data-order="<?= h($r['billing_date']) ?>"><?= h(fmt_date($r['billing_date'])) ?></td>
-                                                    <td class="col-line" data-label="order_date"><?= h($r['order_date'] ?? '') ?></td>
+                                                    <?php if ($hasDate): ?><td class="col-line" data-label="order_date"><?= h($r['order_date'] ?? '') ?></td><?php endif; ?>
                                                     <td data-label="VENDORNO"><?= h($r['vendorno']) ?></td>
                                                     <td data-label="VENDORNAME"><?= h($r['vendorname']) ?></td>
                                                     <td data-label="SITENO"><?= h($r['siteno']) ?></td>
-                                                    <td class="col-line" data-label="branch_code"><?= h($r['branch_code'] ?? '') ?></td>
+                                                    <?php if ($hasBranch): ?><td class="col-line" data-label="branch_code"><?= h($r['branch_code'] ?? '') ?></td><?php endif; ?>
                                                     <td data-label="SITENAME"><?= h($r['sitename']) ?></td>
                                                     <td data-label="MCH3"><?= h($r['mch3']) ?></td>
                                                     <td data-label="MCH3DESC"><?= h($r['mch3desc']) ?></td>
@@ -610,12 +698,13 @@ function fmt_date($v): string
                                                     <td data-label="ARTDESC"><?= h($r['artdesc']) ?></td>
                                                     <td data-label="ARTEAN"><?= h($r['artean']) ?></td>
                                                     <td data-label="VDARTDESC"><?= h($r['vdartdesc']) ?></td>
-                                                    <td class="col-line" data-label="sku"><?= h($r['sku'] ?? '') ?></td>
+                                                    <?php if ($hasSku): ?><td class="col-line" data-label="sku"><?= h($r['sku'] ?? '') ?></td><?php endif; ?>
                                                     <td class="text-right" data-label="QTY"><?= fmt_num($r['qty']) ?></td>
-                                                    <td class="text-right col-line" data-label="quantity"><?= fmt_num($r['quantity']) ?></td>
+                                                    <?php if ($hasQty): ?><td class="text-right col-line" data-label="quantity"><?= fmt_num($r['quantity']) ?></td><?php endif; ?>
                                                     <td class="text-right" data-label="VALUE"><?= fmt_num($r['value'], 2) ?></td>
-                                                    <td class="text-right col-line" data-label="amount"><?= fmt_num($r['amount'], 2) ?></td>
-                                                    <td class="text-right col-diff <?= $diffClass ?>" data-label="diff"><?= fmt_num($r['diff'], 2) ?></td>
+                                                    <?php if ($hasAmount): ?><td class="text-right col-line" data-label="amount"><?= fmt_num($r['amount'], 2) ?></td><?php endif; ?>
+                                                    <?php if ($hasQty): ?><td class="text-right col-diff <?= $qtyDiffClass ?>" data-label="qty diff"><?= fmt_num($r['qty_diff']) ?></td><?php endif; ?>
+                                                    <?php if ($hasAmount): ?><td class="text-right col-diff <?= $amountDiffClass ?>" data-label="amount diff"><?= fmt_num($r['amount_diff'], 2) ?></td><?php endif; ?>
                                                     <td data-label="UOM"><?= h($r['uom']) ?></td>
                                                     <td data-label="VDARTNO"><?= h($r['vdartno']) ?></td>
                                                     <td data-label="SALE_TYPE"><?= h($r['sale_type']) ?></td>
